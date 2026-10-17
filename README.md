@@ -1,51 +1,96 @@
-# Telegram for Galaxy Fold (unofficial fork)
+# Foldgram
 
-An **unofficial** fork of [Telegram for Android](https://github.com/DrKLO/Telegram) that fixes the long-standing
-freeze on Samsung Galaxy Fold devices: after rotating, folding/unfolding, or reopening the app from a notification,
-Telegram would sometimes end up as a blank, unresponsive screen that only a force close could fix.
+**Foldgram is an unofficial Telegram client for Samsung Galaxy Fold devices.** It uses the Telegram API and is part of
+the Telegram ecosystem, but it is not made, endorsed or supported by Telegram. It is the official
+[Telegram for Android](https://github.com/DrKLO/Telegram) source code plus a handful of small fixes, kept as separate
+commits on the `fold7` branch so they are easy to review and to rebase onto every new upstream release.
 
-This is not affiliated with or endorsed by Telegram. All changes live on the `fold7` branch as a few small commits on
-top of the official source, so they are easy to review and to rebase onto new upstream releases.
+Foldgram adds no ads, no analytics, no tracking and no monetization of any kind. Telegram's own features, including
+official sponsored messages in channels, are unchanged.
 
-### What was wrong
+## The bug it fixes
+
+On Galaxy Folds (seen from the Fold 3 to the Fold 7), Telegram sometimes ends up as a blank, unresponsive screen after
+rotating, folding/unfolding, or reopening the app from a notification. There is no crash and no error; only a force
+close helps.
 
 Diagnosed live via ADB on a Galaxy Z Fold 7 while frozen: the app was running, the view hierarchy was intact and there
 was no ANR, yet not a single frame was rendered and input was ignored. Forcing a relaunch made it die with an
-`OutOfMemoryError` — the 512 MB large heap was full. Telegram only implements `onLowMemory()` (which modern Android rarely
-delivers in time) and ignores `onTrimMemory()`, so caches grow until the GC thrashes and the UI starves. Folding,
-rotating or opening a notification merely makes it visible, because those rebuild the UI and need memory.
+`OutOfMemoryError`: the 512 MB large heap was full. Telegram only implements `onLowMemory()`, which modern Android rarely
+delivers in time, and ignores `onTrimMemory()`, so caches grow until the garbage collector thrashes and the UI starves.
+Folding, rotating or opening a notification only makes it visible, because those rebuild the UI and need memory.
 
-### Fixes in this fork
+## What Foldgram changes
 
-- **Memory pressure handling:** `onTrimMemory()` clears in-memory caches; a 30 s heap watchdog purges caches above 80 %
-  heap usage and cleanly restarts the app if usage stays above 92 % (logcat tag `fold7diag` shows the heap history).
-- **Render watchdog:** after resume, window focus and fold transitions the app verifies a frame is actually drawn within
-  1.5 s, and recreates itself once instead of staying frozen.
+- **Memory pressure handling:** `onTrimMemory()` clears in-memory caches; a heap watchdog (every 30 s) purges caches above
+  80 % heap usage and cleanly restarts the app if usage stays above 92 %. `adb logcat -s fold7diag` shows the heap history.
+- **Render watchdog:** after resume, window focus and fold transitions the app checks that a frame is actually drawn
+  within 1.5 s and recreates itself once instead of staying frozen.
 - **No forced refresh rate on foldables:** `preferredRefreshRate` is no longer pinned on devices with a hinge sensor.
 - **Fold/rotation layout:** `density` handled in `configChanges` (cover and main screen differ), a fragile static
-  tablet-mode latch replaced, display metrics re-synced on resume and after configuration-change bursts.
-- **Self-built APK essentials:** background connection on by default (FCM doesn't work for non-official signatures),
-  Firebase SMS verification disabled (it can't complete and stalled the login), in-app updater replaced by a daily
-  check of the upstream repository.
+  tablet-mode latch replaced, display metrics re-synced on resume and after bursts of configuration changes.
+- **Runs next to official Telegram:** own package name (`io.github.samebeat.foldgram`), own contacts-sync account type,
+  own name and icon.
+- **Works without Telegram's signing certificate:** notifications through the background connection (Firebase push only
+  works for Telegram's own signature), Firebase SMS verification disabled (it can't complete and stalled the login),
+  Telegram's in-app updater replaced by a check for new Foldgram releases.
 
-### Building
+## Install
 
-1. Clone with submodules: `git clone --recurse-submodules -b fold7 <this repo>`
-2. Install Android Studio (SDK 36, NDK 27.2.12479018, CMake 3.22.1) and a JDK 17–21.
-3. **Get your own `api_id` / `api_hash`** at [my.telegram.org](https://my.telegram.org) — the sample credentials in
-   the source are flood-limited and login will fail with `API_ID_PUBLISHED_FLOOD`. Put them, together with your own
-   signing keystore passwords, into `~/.gradle/gradle.properties` (never into the repo):
+Download the APK from [Releases](https://github.com/samebeat/Foldgram/releases) (arm64, Android 5.0 or newer) and open
+it. Foldgram installs next to official Telegram; you log in once with your phone number.
+
+**Verify before installing** (optional, recommended): the SHA-256 of each APK is listed in its release, and every release
+is signed with the same certificate:
+
+```
+SHA-256: fd41108487d88b9a47f5970718e35059028f6806c2c15efd72e1e74440183033
+```
+
+Check with `apksigner verify --print-certs Foldgram-*.apk` (Android SDK build-tools).
+
+**Allow background activity, or notifications won't arrive.** Foldgram can't use Google push (see below), so it keeps
+its own connection open, and Android 8+ stops it about a minute after you leave the app unless Foldgram is exempt from
+battery optimization. After login Foldgram asks for this; you can also set it under Settings > Apps > Foldgram >
+Battery > *Unrestricted* (Samsung) or *Battery optimization > Don't optimize* (other devices).
+
+### Known limitations
+
+- No Firebase push (Telegram's push only works for its own signed app): notifications arrive through a persistent
+  background connection, which uses somewhat more battery and needs the battery exemption described above.
+- Login codes sent by SMS aren't filled in automatically; type them in.
+- Features that rely on Google services restricted to Telegram's own app (for example Google Maps tiles, passkeys) may
+  not work.
+- Updates don't come from the Play Store. Once a day Foldgram asks the GitHub API for the latest release (no user data
+  is sent) and shows a notification when a newer one is available.
+
+## Building it yourself
+
+1. Clone with submodules: `git clone --recurse-submodules -b fold7 https://github.com/samebeat/Foldgram.git`
+2. Install Android Studio (SDK 36, NDK 27.2.12479018, CMake 3.22.1) and a JDK 17 to 21.
+3. **Get your own `api_id` / `api_hash`** at [my.telegram.org](https://my.telegram.org). Telegram's API terms require
+   every app to use its own, and the sample credentials in the source are flood-limited (login fails with
+   `API_ID_PUBLISHED_FLOOD`). Put them, together with your signing keystore passwords, into
+   `~/.gradle/gradle.properties`, never into the repo:
    ```properties
    TELEGRAM_APP_ID=1234567
    TELEGRAM_APP_HASH=0123456789abcdef0123456789abcdef
    RELEASE_STORE_PASSWORD=...
    RELEASE_KEY_PASSWORD=...
    ```
-   and place your keystore (alias `androidkey`) at `TMessagesProj/config/private-fold7.keystore`. Without it the
-   build falls back to the public sample keystore — fine for testing, never for distribution.
-4. Build: `gradlew :TMessagesProj_AppStandalone:assembleAfatStandalone` (arm64 only).
-   On Windows, `update-fork.ps1` pulls the latest upstream, rebases the fork's commits, builds and optionally
-   installs on a connected Fold (`-Install`).
+   and place your keystore (alias `androidkey`) at `TMessagesProj/config/private-fold7.keystore`. Without it the build
+   falls back to the public sample keystore: fine for testing, never for distribution. If you publish your own build,
+   also change `FOLDGRAM_PACKAGE`, `FOLDGRAM_APP_NAME` and `FOLDGRAM_GITHUB_REPO` in `foldgram.properties`.
+4. Build the task `:TMessagesProj_AppStandalone:assembleAfatStandalone` (arm64 only), e.g. `./gradlew` on Linux/macOS or
+   `java -cp gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain` on Windows.
+
+### Maintaining the fork
+
+- `update-fork.ps1` (Windows) fetches the latest upstream source, rebases the Foldgram commits onto it, updates
+  submodules, builds, and optionally installs on a connected Fold (`-Install`) or publishes a GitHub release
+  (`-Release`, needs the GitHub CLI). Release tags are `foldgram-<upstream build>-<revision>`; the revision lives in
+  `foldgram.properties`.
+- The *Upstream watch* workflow checks daily whether official Telegram has a newer build and opens an issue if so.
 
 The license is unchanged: GNU GPL v2 or later, see [LICENSE](LICENSE).
 
