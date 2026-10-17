@@ -8473,6 +8473,17 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     }
 
     @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && isResumed) {
+            // The task can be brought to the front without a fresh onResume (the
+            // activity may stay "resumed" while backgrounded on Samsung foldables),
+            // so re-check rendering liveness whenever we gain window focus.
+            armRenderWatchdog();
+        }
+    }
+
+    @Override
     public void onActionModeStarted(ActionMode mode) {
         super.onActionModeStarted(mode);
         visibleActionMode = mode;
