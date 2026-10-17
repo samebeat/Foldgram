@@ -1,15 +1,21 @@
-# update-fork.ps1 - Updates this Fold fork to the latest official Telegram source
+# update-fork.ps1 - Updates Foldgram to the latest official Telegram source
 # (DrKLO/Telegram master), re-applies the fork's patches via rebase, builds the APK
 # and stores it in releases\.
 #
 # Usage:   .\update-fork.ps1            check for an update, build if there is one
 #          .\update-fork.ps1 -Install   additionally install on a connected Galaxy Fold via ADB
 #          .\update-fork.ps1 -Force     build even if upstream hasn't changed
+#          .\update-fork.ps1 -Release   additionally push the branch and publish a GitHub release
+#                                       (tag foldgram-<build>-<FOLDGRAM_REVISION>; needs gh CLI).
+#                                       For a fork-only release, bump FOLDGRAM_REVISION in
+#                                       foldgram.properties, commit, then run with -Force -Release.
 #
 # JDK: uses .local-jdk\jdk-* inside the repo if present, otherwise JAVA_HOME.
 param(
     [switch]$Install,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Release,
+    [string]$Remote = ""
 )
 
 # git/adb write progress to stderr; with "Stop", PowerShell 5.1 would treat that
@@ -70,11 +76,34 @@ if ($newHead -ne $oldBase) {
     git tag -f fold7-base $newHead | Out-Null
     Write-Host "Updating submodules..." -ForegroundColor Cyan
     git submodule update --init --recursive --depth 1 --jobs 4
+    if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Submodule update failed." -ForegroundColor Red; exit 1 }
+
+    # 3b) New upstream version -> fork revision starts at 1 again
+    $props = Get-Content "$repo\foldgram.properties"
+    if (-not ($props -match "^FOLDGRAM_REVISION=1$")) {
+        $props = $props -replace "^FOLDGRAM_REVISION=\d+$", "FOLDGRAM_REVISION=1"
+        [IO.File]::WriteAllLines("$repo\foldgram.properties", $props, (New-Object System.Text.UTF8Encoding($false)))
+        git add foldgram.properties
+        git commit --quiet -m "Reset Foldgram revision for $newVersionMsg"
+    }
 }
 
-# 4) Read the version from gradle.properties
+# 4) Read versions
 $verName = ((Get-Content "$repo\gradle.properties") | Where-Object { $_ -match "^APP_VERSION_NAME=" }) -replace "APP_VERSION_NAME=", ""
-Write-Host "Building Telegram $verName (arm64)..." -ForegroundColor Cyan
+$verCode = ((Get-Content "$repo\gradle.properties") | Where-Object { $_ -match "^APP_VERSION_CODE=" }) -replace "APP_VERSION_CODE=", ""
+$revision = ((Get-Content "$repo\foldgram.properties") | Where-Object { $_ -match "^FOLDGRAM_REVISION=" }) -replace "FOLDGRAM_REVISION=", ""
+$ghRepo = ((Get-Content "$repo\foldgram.properties") | Where-Object { $_ -match "^FOLDGRAM_GITHUB_REPO=" }) -replace "FOLDGRAM_GITHUB_REPO=", ""
+$tag = "foldgram-$verCode-$revision"
+
+if ($Release) {
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { Write-Host "ERROR: -Release needs the GitHub CLI (gh)." -ForegroundColor Red; exit 1 }
+    gh release view $tag --repo $ghRepo *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "ERROR: Release $tag already exists. Bump FOLDGRAM_REVISION in foldgram.properties and commit first." -ForegroundColor Red
+        exit 1
+    }
+}
+Write-Host "Building Foldgram $verName ($tag, arm64)..." -ForegroundColor Cyan
 
 # 5) Build
 $env:JAVA_HOME = $jdk
@@ -88,9 +117,41 @@ if ($LASTEXITCODE -ne 0) {
 # 6) Store the APK
 if (-not (Test-Path "$repo\releases")) { New-Item -ItemType Directory "$repo\releases" | Out-Null }
 $apkSrc = "$repo\TMessagesProj_AppStandalone\build\outputs\apk\afat\standalone\app.apk"
-$apkDst = "$repo\releases\Telegram-$verName-fold7-arm64.apk"
+$apkDst = "$repo\releases\Foldgram-$verName-$revision-arm64.apk"
 Copy-Item $apkSrc $apkDst -Force
+$apkHash = (Get-FileHash $apkDst -Algorithm SHA256).Hash.ToLower()
 Write-Host "Done: $apkDst" -ForegroundColor Green
+Write-Host "SHA-256: $apkHash"
+
+# 6b) Optionally publish a GitHub release
+if ($Release) {
+    if (-not $Remote) {
+        $Remote = if ((git remote) -contains "fork") { "fork" } else { "origin" }
+    }
+    Write-Host "Pushing branch fold7 to '$Remote'..." -ForegroundColor Cyan
+    git push --force-with-lease $Remote fold7
+    if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: git push failed." -ForegroundColor Red; exit 1 }
+
+    $hashFile = "$repo\releases\SHA256SUMS-$tag.txt"
+    [IO.File]::WriteAllText($hashFile, "$apkHash  $(Split-Path $apkDst -Leaf)`n", (New-Object System.Text.UTF8Encoding($false)))
+    $notesFile = "$repo\releases\notes-$tag.md"
+    $notes = @"
+Foldgram $verName (upstream Telegram build $verCode, Foldgram revision $revision).
+
+Foldgram is an **unofficial** Telegram client: it uses the Telegram API and is part of the Telegram ecosystem, but is not made or endorsed by Telegram. It is the official Telegram for Android source plus a few fixes for Samsung Galaxy Fold devices - see the README. No ads, no tracking, no monetization.
+
+**Install:** download the APK below (arm64, Android 5.0+). It installs next to official Telegram; you log in once.
+
+**Verify:**
+- SHA-256 of the APK: ``$apkHash``
+- Signing certificate SHA-256: see the README (identical for every Foldgram release)
+"@
+    [IO.File]::WriteAllText($notesFile, $notes, (New-Object System.Text.UTF8Encoding($false)))
+    $commit = (git rev-parse HEAD).Trim()
+    gh release create $tag $apkDst $hashFile --repo $ghRepo --target $commit --title "Foldgram $verName ($tag)" --notes-file $notesFile
+    if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: gh release create failed." -ForegroundColor Red; exit 1 }
+    Write-Host "Published release $tag." -ForegroundColor Green
+}
 
 # 7) Optionally install
 if ($Install) {

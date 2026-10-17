@@ -20,31 +20,25 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
- * Private-fork update notifier.
+ * Foldgram update notifier.
  *
- * The official in-app updater is disabled in this build (BuildVars.CHECK_UPDATES == false)
- * because APKs from Telegram's servers are signed with their certificate and can't be
- * installed over this privately signed build. Instead, this checker looks at the latest
- * commit on DrKLO/Telegram master (commit messages are "update to <version> (<build>)")
- * and posts a local notification when a newer upstream build than the one this APK was
- * built from is available, so the fork can be rebuilt on the PC.
+ * The official in-app updater is disabled (BuildVars.CHECK_UPDATES == false) because APKs
+ * from Telegram's servers are signed with Telegram's certificate and can't be installed
+ * over Foldgram. Instead, at most once per CHECK_INTERVAL this asks the GitHub API for the
+ * latest Foldgram release (tag foldgram-&lt;upstream build&gt;-&lt;revision&gt;) and posts a
+ * local notification linking to the release page when it is newer than this build.
+ * The request carries no user data.
  */
 public class ForkUpdateChecker {
 
     private static final String PREFS = "forkupdate";
     private static final String KEY_LAST_CHECK = "lastCheck";
-    private static final String KEY_NOTIFIED_BUILD = "notifiedBuild";
+    private static final String KEY_NOTIFIED_TAG = "notifiedTag";
     private static final long CHECK_INTERVAL = 20 * 60 * 60 * 1000L; // 20h
-    private static final String API_URL = "https://api.github.com/repos/DrKLO/Telegram/commits/master";
-    private static final String COMMITS_URL = "https://github.com/DrKLO/Telegram/commits/master";
     private static final String CHANNEL_ID = "fork_updates";
     private static final int NOTIFICATION_ID = 78451;
-
-    private static final Pattern VERSION_PATTERN = Pattern.compile("update to ([0-9.]+) \\((\\d+)\\)");
 
     private static volatile boolean checking;
 
@@ -60,15 +54,21 @@ public class ForkUpdateChecker {
             return;
         }
         checking = true;
+        final String repo = BuildConfig.FOLDGRAM_GITHUB_REPO;
         Utilities.globalQueue.postRunnable(() -> {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(API_URL).openConnection();
+                connection = (HttpURLConnection) new URL("https://api.github.com/repos/" + repo + "/releases/latest").openConnection();
                 connection.setRequestProperty("Accept", "application/vnd.github+json");
-                connection.setRequestProperty("User-Agent", "telegram-private-fork-update-check");
+                connection.setRequestProperty("User-Agent", "Foldgram-update-check");
                 connection.setConnectTimeout(15000);
                 connection.setReadTimeout(15000);
-                if (connection.getResponseCode() == 200) {
+                final int code = connection.getResponseCode();
+                if (code == 200 || code == 404) {
+                    // 404 = no release published yet; don't retry before the next interval either
+                    prefs.edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply();
+                }
+                if (code == 200) {
                     StringBuilder sb = new StringBuilder();
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
                         String line;
@@ -76,17 +76,15 @@ public class ForkUpdateChecker {
                             sb.append(line);
                         }
                     }
-                    prefs.edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply();
-                    JSONObject commit = new JSONObject(sb.toString()).getJSONObject("commit");
-                    String message = commit.getString("message");
-                    Matcher matcher = VERSION_PATTERN.matcher(message);
-                    if (matcher.find()) {
-                        String version = matcher.group(1);
-                        int build = Integer.parseInt(matcher.group(2));
-                        if (build > BuildConfig.UPSTREAM_BUILD_CODE && build != prefs.getInt(KEY_NOTIFIED_BUILD, 0)) {
-                            prefs.edit().putInt(KEY_NOTIFIED_BUILD, build).apply();
-                            AndroidUtilities.runOnUIThread(() -> showNotification(appContext, version, build));
-                        }
+                    final String tag = new JSONObject(sb.toString()).optString("tag_name", null);
+                    final ForkReleaseVersion latest = ForkReleaseVersion.parse(tag);
+                    if (latest != null
+                            && latest.isNewerThan(BuildConfig.UPSTREAM_BUILD_CODE, BuildConfig.FOLDGRAM_REVISION)
+                            && !latest.toTag().equals(prefs.getString(KEY_NOTIFIED_TAG, null))) {
+                        prefs.edit().putString(KEY_NOTIFIED_TAG, latest.toTag()).apply();
+                        // Built from the known repo and the validated tag only - never a URL from the response.
+                        final String releaseUrl = "https://github.com/" + repo + "/releases/tag/" + latest.toTag();
+                        AndroidUtilities.runOnUIThread(() -> showNotification(appContext, latest, releaseUrl));
                     }
                 }
             } catch (Throwable e) {
@@ -101,28 +99,24 @@ public class ForkUpdateChecker {
     }
 
     @SuppressLint("MissingPermission")
-    private static void showNotification(Context context, String version, int build) {
+    private static void showNotification(Context context, ForkReleaseVersion latest, String releaseUrl) {
         try {
             NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager == null) {
                 return;
             }
             if (Build.VERSION.SDK_INT >= 26) {
-                NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Fork-Updates", NotificationManager.IMPORTANCE_DEFAULT);
-                channel.setDescription("Benachrichtigt, wenn eine neue Telegram-Version auf GitHub verfügbar ist");
+                NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "Foldgram updates", NotificationManager.IMPORTANCE_DEFAULT);
+                channel.setDescription("Tells you when a new Foldgram release is available on GitHub");
                 manager.createNotificationChannel(channel);
             }
-            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(COMMITS_URL));
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl));
             PendingIntent pendingIntent = PendingIntent.getActivity(context, 0, intent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             Notification notification = new NotificationCompat.Builder(context, CHANNEL_ID)
                     .setSmallIcon(R.drawable.notification)
-                    .setContentTitle("Neue Telegram-Version verfügbar")
-                    .setContentText("Upstream ist jetzt bei " + version + " (" + build + ") — Fork am PC neu bauen.")
-                    .setStyle(new NotificationCompat.BigTextStyle().bigText(
-                            "Telegram " + version + " (Build " + build + ") ist auf GitHub verfügbar. " +
-                            "Diese private Version wurde aus Build " + BuildConfig.UPSTREAM_BUILD_CODE + " gebaut. " +
-                            "Zum Aktualisieren den Fork am PC neu bauen und installieren."))
+                    .setContentTitle("Foldgram update available")
+                    .setContentText("Release " + latest.toTag() + " is available on GitHub. Tap to download.")
                     .setContentIntent(pendingIntent)
                     .setAutoCancel(true)
                     .build();

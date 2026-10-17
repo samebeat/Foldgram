@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Full round icon for places without adaptive icons (Android < 8, account settings). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@color/foldgram_icon_background"
+        android:pathData="M54,0 A54,54 0 1 1 54,108 A54,54 0 1 1 54,0 Z" />
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:scaleX="1.3"
+        android:scaleY="1.3">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M31,60 L31,78 L44,70 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M36,30 H47 A5,5 0 0 1 52,35 V65 A5,5 0 0 1 47,70 H36 A5,5 0 0 1 31,65 V35 A5,5 0 0 1 36,30 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillAlpha="0.72"
+            android:pathData="M61,30 H72 A5,5 0 0 1 77,35 V65 A5,5 0 0 1 72,70 H61 A5,5 0 0 1 56,65 V35 A5,5 0 0 1 61,30 Z" />
+    </group>
+</vector>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Foldgram mark: a chat bubble made of the two halves of an unfolded foldable. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M31,60 L31,78 L44,70 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M36,30 H47 A5,5 0 0 1 52,35 V65 A5,5 0 0 1 47,70 H36 A5,5 0 0 1 31,65 V35 A5,5 0 0 1 36,30 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillAlpha="0.72"
+        android:pathData="M61,30 H72 A5,5 0 0 1 77,35 V65 A5,5 0 0 1 72,70 H61 A5,5 0 0 1 56,65 V35 A5,5 0 0 1 61,30 Z" />
+</vector>
