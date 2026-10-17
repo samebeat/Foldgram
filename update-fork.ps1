@@ -1,90 +1,100 @@
-# update-fork.ps1 — Aktualisiert den privaten Telegram-Fold7-Fork auf den neuesten
-# offiziellen Stand (DrKLO/Telegram master), wendet die eigenen Patches per Rebase an,
-# baut die APK und legt sie unter releases\ ab.
+# update-fork.ps1 - Updates this Fold fork to the latest official Telegram source
+# (DrKLO/Telegram master), re-applies the fork's patches via rebase, builds the APK
+# and stores it in releases\.
 #
-# Aufruf:   .\update-fork.ps1            nur pruefen + bauen, wenn Update vorhanden
-#           .\update-fork.ps1 -Install   danach direkt per ADB auf dem Fold installieren
-#           .\update-fork.ps1 -Force     bauen, auch wenn kein neuer Upstream-Stand da ist
+# Usage:   .\update-fork.ps1            check for an update, build if there is one
+#          .\update-fork.ps1 -Install   additionally install on a connected Galaxy Fold via ADB
+#          .\update-fork.ps1 -Force     build even if upstream hasn't changed
+#
+# JDK: uses .local-jdk\jdk-* inside the repo if present, otherwise JAVA_HOME.
 param(
     [switch]$Install,
     [switch]$Force
 )
 
-## Hinweis: git/adb schreiben Statusmeldungen auf stderr; mit "Stop" wuerde
-## PowerShell 5.1 das faelschlich als Fehler werten. Exit-Codes werden daher
-## nach jedem kritischen Schritt manuell geprueft.
+# git/adb write progress to stderr; with "Stop", PowerShell 5.1 would treat that
+# as an error. Exit codes are checked manually after each critical step instead.
 $ErrorActionPreference = "Continue"
-$repo = "C:\Projekte\Telegram"
+$repo = $PSScriptRoot
+
+$jdk = $null
 $jdkRoot = Join-Path $repo ".local-jdk"
-$jdk = (Get-ChildItem $jdkRoot -Directory | Where-Object Name -like "jdk-*" | Select-Object -First 1).FullName
-if (-not $jdk) { Write-Host "FEHLER: Kein JDK unter $jdkRoot gefunden." -ForegroundColor Red; exit 1 }
+if (Test-Path $jdkRoot) {
+    $jdk = (Get-ChildItem $jdkRoot -Directory | Where-Object Name -like "jdk-*" | Select-Object -First 1).FullName
+}
+if (-not $jdk -and $env:JAVA_HOME) { $jdk = $env:JAVA_HOME }
+if (-not $jdk -or -not (Test-Path "$jdk\bin\java.exe")) {
+    Write-Host "ERROR: No JDK found. Install JDK 17-21 and set JAVA_HOME, or put one into .local-jdk\." -ForegroundColor Red
+    exit 1
+}
 
 Set-Location $repo
 
-# 0) Arbeitsverzeichnis muss sauber sein (sonst wuerde der Rebase lokale Aenderungen gefaehrden)
+# 0) Working tree must be clean, otherwise the rebase could clobber local changes
 $dirty = git status --porcelain
 if ($dirty) {
-    Write-Host "FEHLER: Es gibt uncommittete Aenderungen im Repo - bitte erst committen/verwerfen:" -ForegroundColor Red
+    Write-Host "ERROR: Uncommitted changes in the repo - commit or discard them first:" -ForegroundColor Red
     $dirty | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
 
-# 1) Neuesten offiziellen Stand holen
-Write-Host "Pruefe auf neue Telegram-Version..." -ForegroundColor Cyan
-git fetch --depth 1 --quiet origin master
-if ($LASTEXITCODE -ne 0) { Write-Host "FEHLER: git fetch fehlgeschlagen (Internet? GitHub erreichbar?)." -ForegroundColor Red; exit 1 }
+# 1) Fetch the latest official source
+Write-Host "Checking for a new Telegram version..." -ForegroundColor Cyan
+$upstreamUrl = "https://github.com/DrKLO/Telegram.git"
+git fetch --depth 1 --quiet $upstreamUrl master
+if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: git fetch failed (internet / GitHub reachable?)." -ForegroundColor Red; exit 1 }
 $newHead = (git rev-parse FETCH_HEAD).Trim()
 $oldBase = (git rev-parse "fold7-base^{commit}").Trim()
 $newVersionMsg = (git log -1 --format=%s FETCH_HEAD).Trim()
 
 if ($newHead -eq $oldBase -and -not $Force) {
-    Write-Host "Kein Update: Upstream ist unveraendert ($newVersionMsg)." -ForegroundColor Green
+    Write-Host "No update: upstream is unchanged ($newVersionMsg)." -ForegroundColor Green
     exit 0
 }
 
 if ($newHead -ne $oldBase) {
-    Write-Host "Neuer Upstream-Stand: $newVersionMsg" -ForegroundColor Yellow
+    Write-Host "New upstream version: $newVersionMsg" -ForegroundColor Yellow
 
-    # 2) Eigene Patches auf den neuen Stand rebasen
-    Write-Host "Wende eigene Patches an (Rebase)..." -ForegroundColor Cyan
+    # 2) Rebase the fork's patches onto the new upstream
+    Write-Host "Re-applying fork patches (rebase)..." -ForegroundColor Cyan
     git checkout --quiet fold7
     git rebase --onto $newHead fold7-base fold7
     if ($LASTEXITCODE -ne 0) {
         git rebase --abort
-        Write-Host "FEHLER: Rebase-Konflikt - der neue Telegram-Code kollidiert mit unseren Patches." -ForegroundColor Red
-        Write-Host "Loesung: Claude im Projekt C:\Projekte\Telegram bitten, den Konflikt aufzuloesen." -ForegroundColor Red
+        Write-Host "ERROR: Rebase conflict - the new Telegram code collides with the fork's patches." -ForegroundColor Red
+        Write-Host "Resolve the conflict manually (git rebase --onto $newHead fold7-base fold7) and run again." -ForegroundColor Red
         exit 1
     }
 
-    # 3) Basis-Tag nachziehen und Submodule aktualisieren
+    # 3) Move the base tag and update submodules
     git tag -f fold7-base $newHead | Out-Null
-    Write-Host "Aktualisiere Submodule..." -ForegroundColor Cyan
+    Write-Host "Updating submodules..." -ForegroundColor Cyan
     git submodule update --init --recursive --depth 1 --jobs 4
 }
 
-# 4) Version aus gradle.properties lesen
+# 4) Read the version from gradle.properties
 $verName = ((Get-Content "$repo\gradle.properties") | Where-Object { $_ -match "^APP_VERSION_NAME=" }) -replace "APP_VERSION_NAME=", ""
-Write-Host "Baue Telegram $verName (arm64, privat signiert)..." -ForegroundColor Cyan
+Write-Host "Building Telegram $verName (arm64)..." -ForegroundColor Cyan
 
 # 5) Build
 $env:JAVA_HOME = $jdk
 $env:Path = "$jdk\bin;$env:Path"
 & "$jdk\bin\java.exe" -cp "gradle\wrapper\gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain :TMessagesProj_AppStandalone:assembleAfatStandalone
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "FEHLER: Build fehlgeschlagen - Log oben pruefen oder Claude fragen." -ForegroundColor Red
+    Write-Host "ERROR: Build failed - see the log above." -ForegroundColor Red
     exit 1
 }
 
-# 6) APK ablegen
+# 6) Store the APK
 if (-not (Test-Path "$repo\releases")) { New-Item -ItemType Directory "$repo\releases" | Out-Null }
 $apkSrc = "$repo\TMessagesProj_AppStandalone\build\outputs\apk\afat\standalone\app.apk"
 $apkDst = "$repo\releases\Telegram-$verName-fold7-arm64.apk"
 Copy-Item $apkSrc $apkDst -Force
-Write-Host "Fertig: $apkDst" -ForegroundColor Green
+Write-Host "Done: $apkDst" -ForegroundColor Green
 
-# 7) Optional direkt installieren
+# 7) Optionally install
 if ($Install) {
-    Write-Host "Suche Fold per ADB..." -ForegroundColor Cyan
+    Write-Host "Looking for a Galaxy Fold via ADB..." -ForegroundColor Cyan
     $fold = $null
     foreach ($line in (adb devices | Select-Object -Skip 1)) {
         $serial = ($line -split "\s+")[0]
@@ -93,9 +103,9 @@ if ($Install) {
         if ($model -match "SM-F9") { $fold = $serial; break }
     }
     if ($fold) {
-        Write-Host "Installiere auf $fold..." -ForegroundColor Cyan
+        Write-Host "Installing on $fold..." -ForegroundColor Cyan
         adb -s $fold install -r $apkDst
     } else {
-        Write-Host "Kein Fold verbunden - APK liegt unter releases\ bereit." -ForegroundColor Yellow
+        Write-Host "No Galaxy Fold connected - the APK is in releases\." -ForegroundColor Yellow
     }
 }
