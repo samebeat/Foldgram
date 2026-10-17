@@ -100,6 +100,7 @@ import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.AutoDeleteMediaTask;
 import org.telegram.messenger.BackupAgent;
 import org.telegram.messenger.BetaUpdate;
+import org.telegram.messenger.ForkUpdateChecker;
 import org.telegram.messenger.BirthdayController;
 import org.telegram.messenger.BotGuardHelper;
 import org.telegram.messenger.BotWebViewVibrationEffect;
@@ -346,6 +347,11 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     private boolean passcodeSaveIntentIsRestore;
 
     private boolean tabletFullSize;
+    // Tracks the tablet/phone mode the current layout hierarchy was actually built with,
+    // so fold/unfold handling doesn't depend on the order of Application/Activity
+    // onConfigurationChanged callbacks or survive activity recreation incorrectly.
+    private Boolean layoutBuiltAsTablet;
+    private Runnable foldSettleRunnable;
 
     private String loadingThemeFileName;
     private String loadingThemeWallpaperName;
@@ -910,6 +916,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         if (i != -1) {
             drawerLayoutContainer.removeViewAt(i);
         }
+        layoutBuiltAsTablet = AndroidUtilities.isTablet();
         if (AndroidUtilities.isTablet()) {
             getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
@@ -1324,7 +1331,10 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     }
 
     private void checkLayout() {
-        if (!AndroidUtilities.isTablet() || rightActionBarLayout == null || AndroidUtilities.getWasTablet() != null && AndroidUtilities.getWasTablet() != AndroidUtilities.isTabletForce()) {
+        if (!AndroidUtilities.isTablet() || rightActionBarLayout == null || layoutBuiltAsTablet != null && !layoutBuiltAsTablet) {
+            // layoutBuiltAsTablet == false means a tablet-mode switch is still pending
+            // (invalidateTabletMode will rebuild the layout); don't shuffle fragments
+            // into layouts that don't match the current hierarchy.
             return;
         }
 
@@ -2831,7 +2841,10 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                                 req.hash = phoneHash;
                                 req.settings = new TLRPC.TL_codeSettings();
                                 req.settings.allow_flashcall = false;
-                                req.settings.allow_app_hash = req.settings.allow_firebase = PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices();
+                                req.settings.allow_app_hash = PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices();
+                                // Private fork: Firebase verification can't work with a
+                                // non-official signature (FIS rejects this package) — see LoginActivity.
+                                req.settings.allow_firebase = false;
                                 SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
                                 if (req.settings.allow_app_hash) {
                                     preferences.edit().putString("sms_hash", BuildVars.getSmsHash()).apply();
@@ -6072,10 +6085,11 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
 
     private boolean firstAppUpdateCheck = true;
     public void checkAppUpdate(boolean force, Browser.Progress progress) {
-        if (!ApplicationLoader.isStandaloneBuild() && !ApplicationLoader.isBetaBuild()) {
+        if (!BuildVars.CHECK_UPDATES) {
+            // Private fork: official update APKs can't install over this signature.
             return;
         }
-        if (!force && !BuildVars.CHECK_UPDATES) {
+        if (!ApplicationLoader.isStandaloneBuild() && !ApplicationLoader.isBetaBuild()) {
             return;
         }
         if (ApplicationLoader.applicationLoaderInstance.isCustomUpdate()) {
@@ -7085,6 +7099,9 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         super.onResume();
         isResumed = true;
         pipActivityHandler.onResume();
+        // The device may have been folded/unfolded or rotated while this activity was
+        // stopped; make sure the cached display metrics match the actual window again.
+        AndroidUtilities.checkDisplaySize(this, null);
         if (onResumeStaticCallback != null) {
             onResumeStaticCallback.run();
             onResumeStaticCallback = null;
@@ -7151,6 +7168,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             showUpdateActivity(UserConfig.selectedAccount, SharedConfig.pendingAppUpdate, true);
         }
         checkAppUpdate(false, null);
+        ForkUpdateChecker.check(this);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             ApplicationLoader.canDrawOverlays = Settings.canDrawOverlays(this);
@@ -7159,6 +7177,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             VoIPFragment.onResume();
         }
         invalidateTabletMode();
+        checkLayout();
         SpoilerEffect2.pause(false);
 
         if (ApplicationLoader.applicationLoaderInstance != null) {
@@ -7181,11 +7200,14 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     public static Runnable whenResumed;
 
     private void invalidateTabletMode() {
-        Boolean wasTablet = AndroidUtilities.getWasTablet();
-        if (wasTablet == null) {
+        // Always clear the global latch set by ApplicationLoader.onConfigurationChanged;
+        // the decision below is based on the mode this activity's layout was built with,
+        // which stays correct across activity recreation and config-change bursts.
+        AndroidUtilities.resetWasTabletFlag();
+        if (layoutBuiltAsTablet == null) {
             return;
         }
-        AndroidUtilities.resetWasTabletFlag();
+        boolean wasTablet = layoutBuiltAsTablet;
         if (wasTablet != AndroidUtilities.isTablet()) {
             long dialogId = 0;
             long topicId = 0;
@@ -7250,6 +7272,25 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         AndroidUtilities.resetTabletFlag();
         invalidateTabletMode();
         checkLayout();
+        // Foldables (fold/unfold) deliver several configuration changes in quick
+        // succession, sometimes with intermediate display metrics. Re-check once the
+        // transition has settled so the UI never gets stuck with stale sizes.
+        if (foldSettleRunnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(foldSettleRunnable);
+        }
+        AndroidUtilities.runOnUIThread(foldSettleRunnable = () -> {
+            foldSettleRunnable = null;
+            if (isFinishing() || isDestroyed()) {
+                return;
+            }
+            AndroidUtilities.checkDisplaySize(this, null);
+            AndroidUtilities.resetTabletFlag();
+            invalidateTabletMode();
+            checkLayout();
+            if (drawerLayoutContainer != null) {
+                drawerLayoutContainer.requestLayout();
+            }
+        }, 300);
         PipRoundVideoView pipRoundVideoView = PipRoundVideoView.getInstance();
         if (pipRoundVideoView != null) {
             pipRoundVideoView.onConfigurationChanged();
