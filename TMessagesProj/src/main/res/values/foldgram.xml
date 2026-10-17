@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Contacts-sync account type / account-settings target package. Upstream hardcodes
+         "org.telegram.messenger"; app modules override this via resValue so a fork can be
+         installed next to official Telegram without both claiming the same account type. -->
+    <string name="app_package_id" translatable="false">org.telegram.messenger</string>
+</resources>

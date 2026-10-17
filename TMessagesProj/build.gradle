@@ -146,6 +146,11 @@ android {
         // used by ForkUpdateChecker to detect newer upstream versions on GitHub.
         buildConfigField "int", "UPSTREAM_BUILD_CODE", APP_VERSION_CODE
 
+        def foldgram = new Properties()
+        rootProject.file("foldgram.properties").withInputStream { foldgram.load(it) }
+        buildConfigField "int", "FOLDGRAM_REVISION", foldgram.getProperty("FOLDGRAM_REVISION")
+        buildConfigField "String", "FOLDGRAM_GITHUB_REPO", "\"" + foldgram.getProperty("FOLDGRAM_GITHUB_REPO") + "\""
+
         // Personal api_id/api_hash come from ~/.gradle/gradle.properties (outside the repo);
         // the published sample credentials are only a fallback and are flood-limited by Telegram.
         buildConfigField "int", "TELEGRAM_APP_ID", (project.findProperty("TELEGRAM_APP_ID") ?: "4").toString()
