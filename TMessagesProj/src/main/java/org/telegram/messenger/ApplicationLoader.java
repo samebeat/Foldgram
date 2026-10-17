@@ -354,6 +354,7 @@ public class ApplicationLoader extends Application {
 
         LauncherIconController.tryFixLauncherIconIfNeeded();
         ProxyRotationController.init();
+        startMemoryWatchdog();
 
         //if (BuildConfig.DEBUG_PRIVATE_VERSION) {
         //    Choreographer60FpsContent.getInstance().addFrameCallback(debugEverySecondChecks, 1);
@@ -397,6 +398,78 @@ public class ApplicationLoader extends Application {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    // Private build: the app previously ran its 512MB large heap full during long
+    // sessions, ending in a GC storm that looks like a total UI freeze (no frames,
+    // no input, no ANR) until the user force-closes it. Upstream only implements
+    // onLowMemory(), which modern Android rarely delivers in time.
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        try {
+            if (level == TRIM_MEMORY_RUNNING_LOW || level == TRIM_MEMORY_RUNNING_CRITICAL || level >= TRIM_MEMORY_MODERATE) {
+                android.util.Log.w("fold7diag", "onTrimMemory(" + level + ") - clearing in-memory caches");
+                ImageLoader.getInstance().clearMemory();
+            }
+        } catch (Throwable e) {
+            FileLog.e(e);
+        }
+    }
+
+    private static final long MEMORY_WATCHDOG_INTERVAL = 30_000;
+    private static Runnable memoryWatchdogRunnable;
+    private static boolean memoryWatchdogPurged;
+
+    private static void startMemoryWatchdog() {
+        if (memoryWatchdogRunnable != null) {
+            return;
+        }
+        memoryWatchdogRunnable = () -> {
+            try {
+                Runtime rt = Runtime.getRuntime();
+                long max = rt.maxMemory();
+                long used = rt.totalMemory() - rt.freeMemory();
+                float usage = max > 0 ? used / (float) max : 0f;
+                android.util.Log.i("fold7diag", "java heap " + (used >> 20) + "/" + (max >> 20) + " MB (" + (int) (usage * 100f) + "%)");
+                if (usage > 0.92f && memoryWatchdogPurged) {
+                    // Cache purge last tick didn't relieve the pressure; restart
+                    // cleanly before the frozen GC-storm state is reached.
+                    android.util.Log.e("fold7diag", "heap still critical after cache purge - restarting app");
+                    restartApplication();
+                    return;
+                }
+                if (usage > 0.80f) {
+                    android.util.Log.w("fold7diag", "heap pressure - clearing in-memory caches");
+                    ImageLoader.getInstance().clearMemory();
+                    memoryWatchdogPurged = true;
+                } else {
+                    memoryWatchdogPurged = false;
+                }
+            } catch (Throwable e) {
+                FileLog.e(e);
+            }
+            AndroidUtilities.runOnUIThread(memoryWatchdogRunnable, MEMORY_WATCHDOG_INTERVAL);
+        };
+        AndroidUtilities.runOnUIThread(memoryWatchdogRunnable, MEMORY_WATCHDOG_INTERVAL);
+    }
+
+    public static void restartApplication() {
+        try {
+            Intent intent = applicationContext.getPackageManager().getLaunchIntentForPackage(applicationContext.getPackageName());
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                android.app.PendingIntent pi = android.app.PendingIntent.getActivity(applicationContext, 7781, intent,
+                        android.app.PendingIntent.FLAG_CANCEL_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+                android.app.AlarmManager am = (android.app.AlarmManager) applicationContext.getSystemService(Context.ALARM_SERVICE);
+                if (am != null) {
+                    am.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 700, pi);
+                }
+            }
+        } catch (Throwable ignore) {
+        }
+        System.exit(0);
     }
 
     private void initPushServices() {
