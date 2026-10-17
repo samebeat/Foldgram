@@ -210,7 +210,7 @@
         <activity
             android:name="org.telegram.ui.LaunchActivity"
             android:theme="@style/Theme.TMessages.Start"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|smallestScreenSize|screenLayout"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|smallestScreenSize|screenLayout|density"
             android:supportsPictureInPicture="true"
             android:hardwareAccelerated="true"
             android:launchMode="singleTask"

@@ -3079,10 +3079,12 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             TLRPC.TL_codeSettings settings = new TLRPC.TL_codeSettings();
             settings.allow_flashcall = simcardAvailable && allowCall && allowCancelCall && allowReadCallLog;
             settings.allow_missed_call = simcardAvailable && allowCall;
-            settings.allow_app_hash = settings.allow_firebase = PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices();
-            if (forceDisableSafetyNet || TextUtils.isEmpty(BuildVars.SAFETYNET_KEY)) {
-                settings.allow_firebase = false;
-            }
+            settings.allow_app_hash = PushListenerController.GooglePushListenerServiceProvider.INSTANCE.hasServices();
+            // Private fork: Firebase Installations rejects non-official signatures
+            // ("Requests from this Android client application ... are blocked"), so the
+            // Firebase SMS verification flow can never complete — never advertise it,
+            // otherwise the server may pick it and login gets stuck after "Next".
+            settings.allow_firebase = false;
 
             ArrayList<TLRPC.TL_auth_authorization> loginTokens = AuthTokensHelper.getSavedLogInTokens();
             if (loginTokens != null) {

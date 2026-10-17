@@ -370,7 +370,10 @@ public class ApplicationLoader extends Application {
         if (preferences.contains("pushService")) {
             enabled = preferences.getBoolean("pushService", true);
         } else {
-            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", false);
+            // Private build: self-built APKs can't rely on Telegram's Firebase project
+            // (API key is restricted to their signing cert), so keep the background
+            // connection service on by default for reliable notifications.
+            enabled = MessagesController.getMainSettings(UserConfig.selectedAccount).getBoolean("keepAliveService", true);
         }
         if (enabled) {
             try {

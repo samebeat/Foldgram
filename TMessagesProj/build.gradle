@@ -142,6 +142,20 @@ android {
 
         multiDexEnabled true
 
+        // Upstream build number this fork was built from (gradle.properties APP_VERSION_CODE),
+        // used by ForkUpdateChecker to detect newer upstream versions on GitHub.
+        buildConfigField "int", "UPSTREAM_BUILD_CODE", APP_VERSION_CODE
+
+        // Personal api_id/api_hash come from ~/.gradle/gradle.properties (outside the repo);
+        // the published sample credentials are only a fallback and are flood-limited by Telegram.
+        buildConfigField "int", "TELEGRAM_APP_ID", (project.findProperty("TELEGRAM_APP_ID") ?: "4").toString()
+        buildConfigField "String", "TELEGRAM_APP_HASH", "\"" + (project.findProperty("TELEGRAM_APP_HASH") ?: "014b35b6184100b085b0d0572f9b5103") + "\""
+
+        ndk {
+            // Private build for a Galaxy Z Fold 7 (arm64 only) — keeps native build times short.
+            abiFilters "arm64-v8a"
+        }
+
         externalNativeBuild {
             cmake {
                 version '3.22.1'
