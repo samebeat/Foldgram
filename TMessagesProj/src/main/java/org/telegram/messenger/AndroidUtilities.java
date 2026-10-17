@@ -2819,6 +2819,12 @@ public class AndroidUtilities {
     }
 
     public static void setPreferredMaxRefreshRate(Window window, float rate) {
+        if (isFold()) {
+            // Foldables: forcing preferredRefreshRate can starve the window of vsync
+            // after an inner/outer display switch (UI freezes until force close, no
+            // ANR, zero frames rendered) — let the system pick the rate instead.
+            return;
+        }
         if (window == null) return;
         final WindowManager wm = window.getWindowManager();
         if (wm == null) return;
@@ -2832,6 +2838,9 @@ public class AndroidUtilities {
     }
 
     public static void setPreferredMaxRefreshRate(WindowManager wm, View windowView, WindowManager.LayoutParams params) {
+        if (isFold()) {
+            return; // see setPreferredMaxRefreshRate(Window, float)
+        }
         if (wm == null) return;
         if (Math.abs(params.preferredRefreshRate - screenMaxRefreshRate) > 0.2) {
             params.preferredRefreshRate = screenMaxRefreshRate;

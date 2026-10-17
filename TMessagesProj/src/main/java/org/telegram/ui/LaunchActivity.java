@@ -352,6 +352,59 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     // onConfigurationChanged callbacks or survive activity recreation incorrectly.
     private Boolean layoutBuiltAsTablet;
     private Runnable foldSettleRunnable;
+    // Render watchdog: on foldables the window can stop receiving vsync after a
+    // display switch (view tree intact, activity resumed, but zero frames drawn and
+    // input ignored). Detect "no draw after invalidate" and recreate once.
+    private Runnable renderWatchdogTimeout;
+    private ViewTreeObserver.OnDrawListener renderWatchdogListener;
+    private long lastRenderWatchdogRecreate;
+
+    private void cancelRenderWatchdog() {
+        if (renderWatchdogTimeout != null) {
+            AndroidUtilities.cancelRunOnUIThread(renderWatchdogTimeout);
+            renderWatchdogTimeout = null;
+        }
+        if (renderWatchdogListener != null && getWindow() != null && getWindow().getDecorView() != null) {
+            final View decor = getWindow().getDecorView();
+            final ViewTreeObserver.OnDrawListener listener = renderWatchdogListener;
+            renderWatchdogListener = null;
+            // removeOnDrawListener must not run from within a draw pass
+            decor.post(() -> {
+                try {
+                    decor.getViewTreeObserver().removeOnDrawListener(listener);
+                } catch (Throwable ignore) {}
+            });
+        }
+    }
+
+    private void armRenderWatchdog() {
+        if (getWindow() == null || getWindow().getDecorView() == null || !getWindow().getDecorView().isAttachedToWindow()) {
+            return;
+        }
+        cancelRenderWatchdog();
+        final View decor = getWindow().getDecorView();
+        final boolean[] drew = new boolean[1];
+        final ViewTreeObserver.OnDrawListener listener = () -> drew[0] = true;
+        try {
+            decor.getViewTreeObserver().addOnDrawListener(listener);
+        } catch (Throwable e) {
+            return;
+        }
+        renderWatchdogListener = listener;
+        decor.invalidate();
+        AndroidUtilities.runOnUIThread(renderWatchdogTimeout = () -> {
+            renderWatchdogTimeout = null;
+            cancelRenderWatchdog();
+            if (drew[0] || !isResumed || isFinishing() || isDestroyed()) {
+                return;
+            }
+            if (SystemClock.elapsedRealtime() - lastRenderWatchdogRecreate > 30000) {
+                lastRenderWatchdogRecreate = SystemClock.elapsedRealtime();
+                FileLog.e("render watchdog: no frame drawn after invalidate, recreating activity");
+                recreate();
+            }
+        }, 1500);
+    }
 
     private String loadingThemeFileName;
     private String loadingThemeWallpaperName;
@@ -6747,6 +6800,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     protected void onPause() {
         super.onPause();
         isResumed = false;
+        cancelRenderWatchdog();
         pipActivityHandler.onPause();
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.stopAllHeavyOperations, 4096);
         ApplicationLoader.mainInterfacePaused = true;
@@ -7065,6 +7119,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         }
         invalidateTabletMode();
         checkLayout();
+        armRenderWatchdog();
         SpoilerEffect2.pause(false);
 
         if (ApplicationLoader.applicationLoaderInstance != null) {
@@ -7169,6 +7224,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             if (drawerLayoutContainer != null) {
                 drawerLayoutContainer.requestLayout();
             }
+            armRenderWatchdog();
         }, 300);
         PipRoundVideoView pipRoundVideoView = PipRoundVideoView.getInstance();
         if (pipRoundVideoView != null) {
