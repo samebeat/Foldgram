@@ -14,3 +14,11 @@ TMessagesProj_AppHockeyApp/afat/
 TMessagesProj_AppStandalone/afat/
 TMessagesProj_AppHuawei/afat/
 TMessagesProj/jni/ffmpeg/build_android
+
+# fold7 private build
+.local-jdk/
+releases/
+/*.apk
+build-log.txt
+login-diag.log
+TMessagesProj/config/private-fold7.keystore
