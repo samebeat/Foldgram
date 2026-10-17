@@ -23,11 +23,19 @@ dependencies {
     implementation files('../TMessagesProj/libs/libgsaverification-client.aar')
 }
 
+def foldgram = new Properties()
+rootProject.file("foldgram.properties").withInputStream { foldgram.load(it) }
+
 android {
     compileSdkVersion 36
     buildToolsVersion '36.0.0'
 
-    defaultConfig.applicationId = APP_PACKAGE
+    // Own package so Foldgram installs next to official Telegram (incl. its org.telegram.messenger.web APK).
+    defaultConfig.applicationId = foldgram.getProperty("FOLDGRAM_PACKAGE")
+    // Launcher label (Telegram API ToS 2.3: the title must not contain "Telegram") and the
+    // contacts-sync account type, which must be unique per app to coexist with Telegram.
+    defaultConfig.resValue "string", "AppName", foldgram.getProperty("FOLDGRAM_APP_NAME")
+    defaultConfig.resValue "string", "app_package_id", foldgram.getProperty("FOLDGRAM_PACKAGE")
 
 
     lintOptions {
@@ -80,7 +88,7 @@ android {
             debuggable true
             jniDebuggable true
             signingConfig signingConfigs.debug
-            applicationIdSuffix ".web"
+            applicationIdSuffix ".debug"
             minifyEnabled false
             multiDexEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), '../TMessagesProj/proguard-rules.pro'
@@ -91,8 +99,7 @@ android {
             debuggable false
             jniDebuggable false
             signingConfig signingConfigs.release
-            applicationIdSuffix ".web"
-            // Private build: R8 disabled — halves rebuild time; APK gets bigger, which is fine here.
+            // R8 disabled — halves rebuild time; APK gets bigger, which is fine here.
             minifyEnabled false
             shrinkResources false
             multiDexEnabled true
@@ -170,4 +177,6 @@ android {
     }
 }
 
-apply plugin: 'com.google.gms.google-services'
+// No google-services plugin: Firebase (FCM) only works with Telegram's own signing
+// certificate, so Foldgram doesn't contact Telegram's Firebase project at all and
+// relies on the background connection service for notifications instead.

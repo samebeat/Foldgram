@@ -671,9 +671,8 @@ public class ThemeActivity extends BaseFragment implements NotificationCenter.No
             chatListRow = rowCount++;
             chatListInfoRow = rowCount++;
 
-            appIconHeaderRow = rowCount++;
-            appIconSelectorRow = rowCount++;
-            appIconShadowRow = rowCount++;
+            // Foldgram: no app icon selector - all alternative icons are variants of the
+            // official Telegram logo, which forks must not use (Telegram API ToS 2.4).
 
             swipeGestureHeaderRow = rowCount++;
             swipeGestureRow = rowCount++;

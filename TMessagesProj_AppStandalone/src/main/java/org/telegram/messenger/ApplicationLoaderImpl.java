@@ -39,6 +39,35 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
         return BuildConfig.APPLICATION_ID;
     }
 
+    // Foldgram: FCM tokens can only be obtained by apps signed with Telegram's own
+    // certificate, so report "no push services" to the server right away. Messages
+    // arrive through the background connection service (NotificationsService).
+    private static final PushListenerController.IPushListenerServiceProvider NO_PUSH_PROVIDER = new PushListenerController.IPushListenerServiceProvider() {
+        @Override
+        public boolean hasServices() {
+            return false;
+        }
+
+        @Override
+        public String getLogTitle() {
+            return "FCM (unavailable for Foldgram)";
+        }
+
+        @Override
+        public void onRequestPushToken() {
+        }
+
+        @Override
+        public int getPushType() {
+            return PushListenerController.PUSH_TYPE_FIREBASE;
+        }
+    };
+
+    @Override
+    protected PushListenerController.IPushListenerServiceProvider onCreatePushProvider() {
+        return NO_PUSH_PROVIDER;
+    }
+
     @Override
     protected boolean isStandalone() {
         return true;
@@ -272,6 +301,7 @@ public class ApplicationLoaderImpl extends ApplicationLoader {
     public void onResume() {
         super.onResume();
         SMSJobsNotification.check();
+        BackgroundConnectionPrompt.onResume();
     }
 
     @Override
