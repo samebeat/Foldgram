@@ -33,7 +33,8 @@ Ruled out along the way: a per-app frame rate override, Telegram's forced `prefe
 - **The fix:** both pre-draw listeners remove themselves from the observer they were registered on and never cancel more
   than one frame, so a missed removal can no longer freeze the window.
 - **Render watchdog (safety net):** after resume, window focus and fold transitions Foldgram checks that a frame is actually drawn
-  within 3 s while the window is visible and focused. If not, it restarts its own process and reopens itself, which is
+  within 3 s while the activity is resumed, its window is shown and the screen is on. If not, it restarts its own process
+  and reopens itself, which is
   what a force close does, at most once every 3 minutes. It logs the window state when it fires
   (`adb logcat -s fold7diag`), in case another code path ever blocks drawing.
 - **Memory pressure handling:** `onTrimMemory()` clears in-memory caches; a heap watchdog (every 30 s) purges caches above
