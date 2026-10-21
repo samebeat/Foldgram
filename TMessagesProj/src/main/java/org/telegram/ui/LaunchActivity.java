@@ -101,6 +101,7 @@ import org.telegram.messenger.AutoDeleteMediaTask;
 import org.telegram.messenger.BackupAgent;
 import org.telegram.messenger.BetaUpdate;
 import org.telegram.messenger.ForkUpdateChecker;
+import org.telegram.messenger.ProcessRestarter;
 import org.telegram.messenger.BirthdayController;
 import org.telegram.messenger.BotGuardHelper;
 import org.telegram.messenger.BotWebViewVibrationEffect;
@@ -352,12 +353,14 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     // onConfigurationChanged callbacks or survive activity recreation incorrectly.
     private Boolean layoutBuiltAsTablet;
     private Runnable foldSettleRunnable;
-    // Render watchdog: on foldables the window can stop receiving vsync after a
-    // display switch (view tree intact, activity resumed, but zero frames drawn and
-    // input ignored). Detect "no draw after invalidate" and recreate once.
+    // Render watchdog: on foldables the whole process can stop drawing (view tree intact,
+    // activity resumed, no ANR, zero frames, input ignored). Recreating the activity does not
+    // help - new activities in the same process don't draw either - so restart the process,
+    // which is what a force close does. The throttle is persisted so it survives the restart.
+    private static final long RENDER_WATCHDOG_TIMEOUT = 3000;
+    private static final long RENDER_WATCHDOG_MIN_RESTART_INTERVAL = 3 * 60 * 1000;
     private Runnable renderWatchdogTimeout;
     private ViewTreeObserver.OnDrawListener renderWatchdogListener;
-    private long lastRenderWatchdogRecreate;
 
     private void cancelRenderWatchdog() {
         if (renderWatchdogTimeout != null) {
@@ -391,6 +394,11 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             return;
         }
         renderWatchdogListener = listener;
+        // Distinguishes "no vsync arrives at all" from "vsync arrives but nothing is drawn".
+        final boolean[] vsync = new boolean[1];
+        try {
+            android.view.Choreographer.getInstance().postFrameCallback(frameTimeNanos -> vsync[0] = true);
+        } catch (Throwable ignore) {}
         decor.invalidate();
         AndroidUtilities.runOnUIThread(renderWatchdogTimeout = () -> {
             renderWatchdogTimeout = null;
@@ -398,12 +406,24 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             if (drew[0] || !isResumed || isFinishing() || isDestroyed()) {
                 return;
             }
-            if (SystemClock.elapsedRealtime() - lastRenderWatchdogRecreate > 30000) {
-                lastRenderWatchdogRecreate = SystemClock.elapsedRealtime();
-                FileLog.e("render watchdog: no frame drawn after invalidate, recreating activity");
-                recreate();
+            final android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            final String state = "vsync=" + vsync[0] + " focus=" + hasWindowFocus() + " shown=" + decor.isShown()
+                    + " dirty=" + decor.isDirty() + " layoutRequested=" + decor.isLayoutRequested()
+                    + " interactive=" + (pm == null || pm.isInteractive())
+                    + " display=" + (decor.getDisplay() != null ? decor.getDisplay().getDisplayId() : -1);
+            if (!hasWindowFocus() || !decor.isShown() || (pm != null && !pm.isInteractive())) {
+                android.util.Log.w("fold7diag", "render watchdog: no frame, but window not visible/focused - ignoring (" + state + ")");
+                return;
             }
-        }, 1500);
+            final SharedPreferences prefs = getSharedPreferences("fold7diag", MODE_PRIVATE);
+            final long now = System.currentTimeMillis();
+            if (Math.abs(now - prefs.getLong("lastWatchdogRestart", 0)) < RENDER_WATCHDOG_MIN_RESTART_INTERVAL) {
+                android.util.Log.e("fold7diag", "render watchdog: no frame drawn, restarted recently - not restarting again (" + state + ")");
+                return;
+            }
+            prefs.edit().putLong("lastWatchdogRestart", now).commit();
+            ProcessRestarter.restart(this, "render watchdog: no frame drawn within " + RENDER_WATCHDOG_TIMEOUT + "ms (" + state + ")");
+        }, RENDER_WATCHDOG_TIMEOUT);
     }
 
     private String loadingThemeFileName;

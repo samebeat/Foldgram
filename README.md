@@ -14,18 +14,30 @@ On Galaxy Folds (seen from the Fold 3 to the Fold 7), Telegram sometimes ends up
 rotating, folding/unfolding, or reopening the app from a notification. There is no crash and no error; only a force
 close helps.
 
-Diagnosed live via ADB on a Galaxy Z Fold 7 while frozen: the app was running, the view hierarchy was intact and there
-was no ANR, yet not a single frame was rendered and input was ignored. Forcing a relaunch made it die with an
-`OutOfMemoryError`: the 512 MB large heap was full. Telegram only implements `onLowMemory()`, which modern Android rarely
-delivers in time, and ignores `onTrimMemory()`, so caches grow until the garbage collector thrashes and the UI starves.
-Folding, rotating or opening a notification only makes it visible, because those rebuild the UI and need memory.
+Diagnosed live via ADB on a Galaxy Z Fold 7 while frozen: the process is running, the activity is resumed, the view
+hierarchy is intact, and there is no ANR, yet not a single frame is rendered. Android itself names the reason:
+`Canceling draw. cancelDueToPreDrawListener=true` and `mLastPerformTraversalsFailedReason=predraw_org.telegram.ui.ChatActivity$104`.
+
+That listener is registered in `ChatActivity.fixLayout()`. On tablets, which includes an unfolded Fold, it returns
+`false` on purpose to skip exactly one frame and then removes itself via `avatarContainer.getViewTreeObserver()`. If the
+chat header was detached or replaced in the meantime, for example when opening a chat from a notification moves it
+between the panes of the tablet layout, that call returns a different observer and the removal silently does nothing.
+The listener stays on the window and cancels every frame from then on, until the process dies (force close).
+`RecyclerItemsEnterAnimator` (the chat list's enter animation) has the same pattern.
+
+Ruled out along the way: a per-app frame rate override, Telegram's forced `preferredRefreshRate`, and memory exhaustion
+(a full heap seen once was a side effect of an early, looping version of the watchdog below).
 
 ## What Foldgram changes
 
+- **The fix:** both pre-draw listeners remove themselves from the observer they were registered on and never cancel more
+  than one frame, so a missed removal can no longer freeze the window.
+- **Render watchdog (safety net):** after resume, window focus and fold transitions Foldgram checks that a frame is actually drawn
+  within 3 s while the window is visible and focused. If not, it restarts its own process and reopens itself, which is
+  what a force close does, at most once every 3 minutes. It logs the window state when it fires
+  (`adb logcat -s fold7diag`), in case another code path ever blocks drawing.
 - **Memory pressure handling:** `onTrimMemory()` clears in-memory caches; a heap watchdog (every 30 s) purges caches above
-  80 % heap usage and cleanly restarts the app if usage stays above 92 %. `adb logcat -s fold7diag` shows the heap history.
-- **Render watchdog:** after resume, window focus and fold transitions the app checks that a frame is actually drawn
-  within 1.5 s and recreates itself once instead of staying frozen.
+  80 % heap usage and restarts the app if usage stays above 92 %.
 - **No forced refresh rate on foldables:** `preferredRefreshRate` is no longer pinned on devices with a hinge sensor.
 - **Fold/rotation layout:** `density` handled in `configChanges` (cover and main screen differ), a fragile static
   tablet-mode latch replaced, display metrics re-synced on resume and after bursts of configuration changes.

@@ -77,11 +77,24 @@ public class RecyclerItemsEnterAnimator {
             from--;
         }
         int finalFrom = from;
+        final ViewTreeObserver registeredOn = listView.getViewTreeObserver();
         ViewTreeObserver.OnPreDrawListener preDrawListener = new ViewTreeObserver.OnPreDrawListener() {
+            private boolean consumed;
+
             @Override
             public boolean onPreDraw() {
+                // Remove from the observer it was added to as well: listView.getViewTreeObserver()
+                // returns a different observer once the list is detached, and a listener left on
+                // the window that keeps returning false cancels every frame (frozen blank UI).
+                if (registeredOn.isAlive()) {
+                    registeredOn.removeOnPreDrawListener(this);
+                }
                 listView.getViewTreeObserver().removeOnPreDrawListener(this);
                 preDrawListeners.remove(this);
+                if (consumed) {
+                    return true;
+                }
+                consumed = true;
                 int n = listView.getChildCount();
                 AnimatorSet animatorSet = new AnimatorSet();
                 for (int i = 0; i < n; i++) {
@@ -131,7 +144,7 @@ public class RecyclerItemsEnterAnimator {
             }
         };
         preDrawListeners.add(preDrawListener);
-        listView.getViewTreeObserver().addOnPreDrawListener(preDrawListener);
+        registeredOn.addOnPreDrawListener(preDrawListener);
     }
 
     public View getProgressView() {
