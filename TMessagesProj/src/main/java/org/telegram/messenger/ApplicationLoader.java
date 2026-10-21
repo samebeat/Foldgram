@@ -281,6 +281,12 @@ public class ApplicationLoader extends Application {
 
     @Override
     public void onCreate() {
+        if (ProcessRestarter.isRestartProcess(this)) {
+            // The ":restart" helper process only hosts RestartActivity - never initialize
+            // Telegram (native libs, connections, database) a second time in it.
+            super.onCreate();
+            return;
+        }
         applicationLoaderInstance = this;
         try {
             applicationContext = getApplicationContext();
@@ -436,7 +442,6 @@ public class ApplicationLoader extends Application {
                 if (usage > 0.92f && memoryWatchdogPurged) {
                     // Cache purge last tick didn't relieve the pressure; restart
                     // cleanly before the frozen GC-storm state is reached.
-                    android.util.Log.e("fold7diag", "heap still critical after cache purge - restarting app");
                     restartApplication();
                     return;
                 }
@@ -456,20 +461,18 @@ public class ApplicationLoader extends Application {
     }
 
     public static void restartApplication() {
-        try {
-            Intent intent = applicationContext.getPackageManager().getLaunchIntentForPackage(applicationContext.getPackageName());
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                android.app.PendingIntent pi = android.app.PendingIntent.getActivity(applicationContext, 7781, intent,
-                        android.app.PendingIntent.FLAG_CANCEL_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
-                android.app.AlarmManager am = (android.app.AlarmManager) applicationContext.getSystemService(Context.ALARM_SERVICE);
-                if (am != null) {
-                    am.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 700, pi);
-                }
-            }
-        } catch (Throwable ignore) {
+        // Shared, persisted throttle with the render watchdog (LaunchActivity): survives the restart,
+        // so a heap that is already critical right after start can't cause a restart loop.
+        final SharedPreferences prefs = applicationContext.getSharedPreferences("fold7diag", Context.MODE_PRIVATE);
+        final long now = System.currentTimeMillis();
+        if (Math.abs(now - prefs.getLong("lastWatchdogRestart", 0)) < 3 * 60 * 1000) {
+            android.util.Log.e("fold7diag", "heap still critical after cache purge, but restarted recently - not restarting again");
+            return;
         }
-        System.exit(0);
+        prefs.edit().putLong("lastWatchdogRestart", now).commit();
+        final org.telegram.ui.LaunchActivity activity = org.telegram.ui.LaunchActivity.instance;
+        final boolean foreground = !mainInterfacePaused && activity != null;
+        ProcessRestarter.restart(foreground ? activity : null, "heap still critical after cache purge");
     }
 
     private void initPushServices() {
