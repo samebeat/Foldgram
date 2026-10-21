@@ -411,8 +411,10 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
                     + " dirty=" + decor.isDirty() + " layoutRequested=" + decor.isLayoutRequested()
                     + " interactive=" + (pm == null || pm.isInteractive())
                     + " display=" + (decor.getDisplay() != null ? decor.getDisplay().getDisplayId() : -1);
-            if (!hasWindowFocus() || !decor.isShown() || (pm != null && !pm.isInteractive())) {
-                android.util.Log.w("fold7diag", "render watchdog: no frame, but window not visible/focused - ignoring (" + state + ")");
+            // No window-focus requirement: a window that never draws doesn't get input focus,
+            // so requiring it would skip exactly the stalled case (observed: focus=false).
+            if (!decor.isShown() || (pm != null && !pm.isInteractive())) {
+                android.util.Log.w("fold7diag", "render watchdog: no frame, but window not shown / screen off - ignoring (" + state + ")");
                 return;
             }
             final SharedPreferences prefs = getSharedPreferences("fold7diag", MODE_PRIVATE);
