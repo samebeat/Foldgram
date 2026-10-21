@@ -31375,25 +31375,40 @@ public class ChatActivity extends BaseFragment implements
 
     private void fixLayout() {
         if (avatarContainer != null) {
-            final ViewTreeObserver observer = avatarContainer.getViewTreeObserver();
-            observer.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
-                private boolean done;
+            final ViewTreeObserver registeredOn = avatarContainer.getViewTreeObserver();
+            registeredOn.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+                private boolean consumed;
 
                 @Override
                 public boolean onPreDraw() {
-                    // remove from the observer it was added to: avatarContainer may be detached by now (fragments moved
-                    // between the tablet layouts) and return another observer, leaving this one cancelling every frame
-                    if (observer.isAlive()) {
-                        observer.removeOnPreDrawListener(this);
-                    }
+                    // fixLayoutInternal() returns false on tablets (incl. unfolded foldables) to skip
+                    // exactly one frame. Removing via avatarContainer.getViewTreeObserver() fails when
+                    // avatarContainer has been detached or replaced meanwhile (it then returns another
+                    // observer), so the listener stayed on the window and cancelled every frame
+                    // forever: blank, frozen UI until force close. Remove from every candidate and
+                    // never cancel more than one frame.
+                    removeFrom(registeredOn);
                     if (avatarContainer != null) {
-                        avatarContainer.getViewTreeObserver().removeOnPreDrawListener(this);
+                        removeFrom(avatarContainer.getViewTreeObserver());
                     }
-                    if (done) {
+                    if (fragmentView != null) {
+                        removeFrom(fragmentView.getViewTreeObserver());
+                    }
+                    final Activity activity = getParentActivity();
+                    if (activity != null && activity.getWindow() != null) {
+                        removeFrom(activity.getWindow().getDecorView().getViewTreeObserver());
+                    }
+                    if (consumed) {
                         return true;
                     }
-                    done = true;
+                    consumed = true;
                     return fixLayoutInternal();
+                }
+
+                private void removeFrom(ViewTreeObserver observer) {
+                    if (observer != null && observer.isAlive()) {
+                        observer.removeOnPreDrawListener(this);
+                    }
                 }
             });
         }
