@@ -584,6 +584,13 @@ public class NotificationCenter {
     }
 
     public void postNotificationName(final int id, Object... args) {
+        if (ApplicationLoader.applicationHandler != null && Thread.currentThread() != ApplicationLoader.applicationHandler.getLooper().getThread()) {
+            // Upstream enforces main-thread posting only in debug builds; in release, observers
+            // ran on the caller's thread and touched views from it (e.g. notificationsSettingsUpdated
+            // posted from notificationsQueue), which can leave the window's layout stuck for good.
+            postNotificationNameOnUIThread(id, args);
+            return;
+        }
         boolean allowDuringAnimation = id == startAllHeavyOperations || id == stopAllHeavyOperations || id == didReplacedPhotoInMemCache || id == closeChats || id == invalidateMotionBackground || id == needCheckSystemBarColors || id == messageReceivedByServer2;
         ArrayList<Integer> expiredIndices = null;
         if (!allowDuringAnimation && allowedNotifications.size() > 0) {

@@ -58,6 +58,7 @@ import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewParent;
 import android.view.ViewAnimationUtils;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
@@ -426,6 +427,50 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             prefs.edit().putLong("lastWatchdogRestart", now).commit();
             ProcessRestarter.restart(this, "render watchdog: no frame drawn within " + RENDER_WATCHDOG_TIMEOUT + "ms (" + state + ")");
         }, RENDER_WATCHDOG_TIMEOUT);
+    }
+
+    // Layout watchdog: a requestLayout() from a background thread marks the whole ancestor chain
+    // as layout-requested and then throws in ViewRootImpl.checkThread before the root notes it.
+    // Every later requestLayout() stops at the first marked ancestor, so the window keeps drawing
+    // but is never measured again: newly opened chats stay 0x0 (black right pane on the unfolded
+    // Fold) and list taps are dropped. A real layout request is served within one frame, so a
+    // request still pending on two checks in a row is stuck - hand it to the root directly.
+    private static final long LAYOUT_WATCHDOG_INTERVAL = 1000;
+    private boolean layoutWatchdogSawRequest;
+    private final Runnable layoutWatchdog = new Runnable() {
+        @Override
+        public void run() {
+            final View decor = getWindow() != null ? getWindow().peekDecorView() : null;
+            if (decor != null && decor.isAttachedToWindow() && decor.isLayoutRequested() && !decor.isInLayout()) {
+                if (layoutWatchdogSawRequest) {
+                    layoutWatchdogSawRequest = false;
+                    final ViewParent root = decor.getParent();
+                    android.util.Log.w("fold7diag", "layout watchdog: layout requested but never performed - forcing root layout (root=" + (root != null ? root.getClass().getSimpleName() : null) + ")");
+                    if (root != null) {
+                        try {
+                            root.requestLayout();
+                        } catch (Throwable e) {
+                            android.util.Log.e("fold7diag", "layout watchdog: root requestLayout failed", e);
+                        }
+                    }
+                } else {
+                    layoutWatchdogSawRequest = true;
+                }
+            } else {
+                layoutWatchdogSawRequest = false;
+            }
+            AndroidUtilities.runOnUIThread(this, LAYOUT_WATCHDOG_INTERVAL);
+        }
+    };
+
+    private void startLayoutWatchdog() {
+        stopLayoutWatchdog();
+        AndroidUtilities.runOnUIThread(layoutWatchdog, LAYOUT_WATCHDOG_INTERVAL);
+    }
+
+    private void stopLayoutWatchdog() {
+        AndroidUtilities.cancelRunOnUIThread(layoutWatchdog);
+        layoutWatchdogSawRequest = false;
     }
 
     private String loadingThemeFileName;
@@ -6936,6 +6981,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         super.onPause();
         isResumed = false;
         cancelRenderWatchdog();
+        stopLayoutWatchdog();
         pipActivityHandler.onPause();
         NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.stopAllHeavyOperations, 4096);
         ApplicationLoader.mainInterfacePaused = true;
@@ -7255,6 +7301,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         invalidateTabletMode();
         checkLayout();
         armRenderWatchdog();
+        startLayoutWatchdog();
         SpoilerEffect2.pause(false);
 
         if (ApplicationLoader.applicationLoaderInstance != null) {
