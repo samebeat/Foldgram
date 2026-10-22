@@ -32,6 +32,11 @@ Ruled out along the way: a per-app frame rate override, Telegram's forced `prefe
 
 - **The fix:** both pre-draw listeners remove themselves from the observer they were registered on and never cancel more
   than one frame, so a missed removal can no longer freeze the window.
+- **Chats not opening in the right pane:** a second, separate bug. In release builds Telegram's `NotificationCenter`
+  delivered events on the thread that posted them, so the notification thread could make chat views call
+  `requestLayout()` off the main thread. The window then never laid itself out again: the app kept drawing, but a tapped
+  chat stayed invisible (black right pane on an unfolded Fold) and taps on the chat list were ignored. Foldgram hands such
+  events to the main thread, and a layout watchdog re-requests layout from the window root if a request stays pending.
 - **Render watchdog (safety net):** after resume, window focus and fold transitions Foldgram checks that a frame is actually drawn
   within 3 s while the activity is resumed, its window is shown and the screen is on. If not, it restarts its own process
   and reopens itself, which is
