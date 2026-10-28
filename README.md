@@ -1,5 +1,8 @@
 # Foldgram
 
+[![Release](https://img.shields.io/github/v/release/samebeat/Foldgram)](https://github.com/samebeat/Foldgram/releases)
+[![License: GPL v2](https://img.shields.io/badge/license-GPL--2.0-blue)](LICENSE)
+
 **Foldgram is an unofficial Telegram client for Samsung Galaxy Fold devices.** It uses the Telegram API and is part of
 the Telegram ecosystem, but it is not made, endorsed or supported by Telegram. It is the official
 [Telegram for Android](https://github.com/DrKLO/Telegram) source code plus a handful of small fixes, kept as separate
